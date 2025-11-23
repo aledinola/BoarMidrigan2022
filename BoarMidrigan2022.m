@@ -70,7 +70,7 @@ Params.G=0.2; % 0.025
 %% Grids
 d_grid=linspace(0,1,n_d)'; % labor supply
 
-Params.maxa=40; % max assets [10 is the max on the x-axis of Fig 4, so seems reasonable? Solved model, clearly too low as people hit the top]
+Params.maxa=40; % max assets [10 is the max on the x-axis of Fig 4, so seems reasonable? Solved model, clearly too low as people hit the top; later on, turns out Fig 4 x-axis was 'relative to mean wealth', so no wonder the 10 was too low]
 a_grid=Params.maxa*(linspace(0,1,n_a)'.^3); % assets: 0 to max, ^3 adds curvature so more points near 0
 
 [z_grid_pre,pi_z_pre]=discretizeAR1_FarmerToda(0,Params.rho_z,Params.sigma_e,n_z-1);
