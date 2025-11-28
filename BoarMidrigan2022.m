@@ -1,25 +1,24 @@
 % Boar & Midrigan (2022) - Efficient Redistribution
 
-% Essentially, we are going to be solving transition paths in an largely
-% plain-vanilla Aiyagari model with endogenous labour.
+% Essentially, we are going to be solving transition paths in an largely plain-vanilla Aiyagari model with endogenous labour.
 % I denote the markov process on per-unit-time-worked earnings as z, they called it e.
 
 % Paper is missing info about how Government works.
-% There is a per-period Government budget constraint, and government debt
-% in the initial stationary general eqm is 100% of GDP. 
-% But what is missing is how B_t is determined over the transition path? Is is constant?, or always
-% stays at 100% of GDP?, or?
-% Page 85 "The lump-sum transfer iota_t adjusts at every date to ensure
-% that the government budget is balanced". I guess this means G_t is
-% constant, but still leaves the question of what is B_t doing?
-% Relatedly, footnote 13 says "We have experimented with allowing the
-% planner to also choose debt optimally and found that raising government
-% debt has similar implications to increasing the wealth tax." [there are two 
-% more sentences in footnote 13 that I omit here] [Rob's note: makes senses as 
+% There is a per-period Government budget constraint, and government debt in the initial stationary general eqm is 100% of GDP. 
+% But what is missing is how B_t is determined over the transition path? Is is constant?, or always stays at 100% of GDP?, or?
+% BM2022, pg 85: "For each [tax rate] experiment we adjust the lump-sum transfer iota_t to ensure that the government budget constraint is satisfied at all dates."
+% I am assuming this is inteded to mean that both G_t and B_t are assumed to be constant.
+% Relatedly, footnote 13 says "We have experimented with allowing the planner to also choose debt optimally and found that raising government
+% debt has similar implications to increasing the wealth tax." [there are two more sentences in footnote 13 that I omit here] [Rob's note: makes senses as 
 % it depresses r, which is indistinguishable from a wealth tax] 
 % Based on all this I am just keeping B_t constant over the transition path.
 
-n_d=21;
+% Note: the transition paths in this model are pretty fragile relative to
+% most papers, this is because of iota, the lump-sum transfers which make
+% the transition paths easy to fail. The 'update' of transition path
+% iterations is key to avoiding them failing.
+
+n_d=51;
 n_a=301;
 n_z=12; % 11 to discretize AR(1), plus one for the super-star state
 
@@ -63,7 +62,7 @@ Params.zbar=504.3; % ability super-star state relative to mean
 
 % Following parameters are deteremined in general eqm, these are just
 % initial guesses (I had worse guesses on the first run, these are updated
-% so the initial general eqm is quicker to solve by using decent guesses)
+% so the initial general eqm is quicker to solve by using less bad guesses)
 Params.r=0.05;   % 0.035
 Params.iota=0.3; % 0.31
 Params.B=1.8;    % 1.84
@@ -72,7 +71,7 @@ Params.G=0.05;   % 0.025
 %% Grids
 d_grid=linspace(0,1,n_d)'; % labor supply
 
-Params.maxa=40; % max assets [10 is the max on the x-axis of Fig 4, so seems reasonable? Solved model, clearly too low as people hit the top]
+Params.maxa=40; % max assets [10 is the max on the x-axis of Fig 4, so seems reasonable? Solved model, clearly too low as people hit the top; later on, turns out Fig 4 x-axis was 'relative to mean wealth', so no wonder 10 was too low]
 a_grid=Params.maxa*(linspace(0,1,n_a)'.^3); % assets: 0 to max, ^3 adds curvature so more points near 0
 
 
@@ -200,7 +199,8 @@ T=100; % BM2022 Fig 3 has this as x-axis, so seems appropriate
 
 % Initial guess for price path
 PricePath0.r=[linspace(p_eqm_init.r,p_eqm_final.r,ceil(T/3)),p_eqm_final.r*ones(1,T-ceil(T/3))];
-PricePath0.iota=[linspace(p_eqm_init.iota,p_eqm_final.iota,ceil(T/3)),p_eqm_final.iota*ones(1,T-ceil(T/3))];
+% PricePath0.iota=[linspace(p_eqm_init.iota,p_eqm_final.iota,ceil(T/3)),p_eqm_final.iota*ones(1,T-ceil(T/3))];
+PricePath0.iota=[linspace(p_eqm_init.iota,0.8*p_eqm_final.iota,ceil(T/3)),0.8*p_eqm_final.iota*ones(1,T-ceil(T/3)-1),p_eqm_final.iota]; % deliberately start without enough iota
 
 % Parameter path is trivial, as they are preannounced one-off reforms
 ParamPath.tau=Params.tau*ones(1,T);
@@ -211,15 +211,15 @@ ParamPath.xi_a=Params.xi_a*ones(1,T);
 
 % Same as before, except that the government budget now has to be explicit that it is last period gov debt.
 GeneralEqmEqns_TransPath.capitalmarket=GeneralEqmEqns.capitalmarket;
-GeneralEqmEqns_TransPath.govbudget=@(r,B,B_tminus1,G,TaxRevenue) (1+r)*B_tminus1+G-(B+TaxRevenue);
-% Note: BM2022 are solving for a path where B is constant over time, but I
-% still want to write out B_tminus1 so that it would still work for other setups.
+% GeneralEqmEqns_TransPath.govbudget=@(r,B,B_tminus1,G,TaxRevenue) (1+r)*B_tminus1+G-(B+TaxRevenue);
+% Note: As discussed at start of this script BM2022 are presumably solving for a path where B is constant over time, but the commented out line above still writes out B_tminus1 so that it would still work for other setups.
+GeneralEqmEqns_TransPath.govbudget=@(r,B,G,TaxRevenue) (1+r)*B+G-(B+TaxRevenue); % Take advantage of constant B
 
 transpathoptions.GEnewprice=3;
 % Need to explain to transpathoptions how to use the GeneralEqmEqns to update the general eqm transition prices (in PricePath).
 transpathoptions.GEnewprice3.howtoupdate=... % a row is: GEcondn, price, add, factor
-    {'capitalmarket','r',0,0.2;...  % captialMarket GE condition will be positive if r is too big, so subtract
-    'govbudget','iota',0,0.5;... % govbudget GE condition will be negative if iota is too big, so add [iota is subtracted from the tax, so bigger iota means smaller TaxRevenue]
+    {'capitalmarket','r',0,0.3;...  % captialMarket GE condition will be positive if r is too big, so subtract
+    'govbudget','iota',0,0.05;... % govbudget GE condition will be positive if iota is too big, so subtract [iota is subtracted from the tax, so bigger iota means smaller TaxRevenue; note, units of iota are essentially the same as units of TaxRevenue, so don't need to think too hard about the size of the factor]
     };
 % Note: the update is essentially new_price=price+factor*add*GEcondn_value-factor*(1-add)*GEcondn_value
 % Notice that this adds factor*GEcondn_value when add=1 and subtracts it what add=0
@@ -229,7 +229,7 @@ transpathoptions.GEnewprice3.howtoupdate=... % a row is: GEcondn, price, add, fa
 
 % For the transition path, turn on divide and conquer
 vfoptions.divideandconquer=1;
-vfoptions.level1n=15;
+vfoptions.level1n=11; % might be slightly faster or slower with a higher/lower value (do a tic-toc on ValueFnOnTransPath_Case1() to find the fastest if you want to find out what to set this to)
 
 transpathoptions.verbose=1;
 tic;
