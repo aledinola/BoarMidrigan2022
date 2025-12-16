@@ -104,7 +104,7 @@ vftime=toc
 StationaryDist=StationaryDist_Case1(Policy,n_d,n_a,n_z,pi_z,simoptions);
 
 %% Setup model moments
-FnsToEvaluate.K=@(h,aprime,a,z) a;
+FnsToEvaluate.A=@(h,aprime,a,z) a;
 FnsToEvaluate.L=@(h,aprime,a,z) h*z;
 FnsToEvaluate.TaxRevenue=@(h,aprime,a,z,r,tau,xi,iota,delta,alpha,tau_a,xi_a) BM2022_IncomeTaxRevenue(h,aprime,a,z,r,tau,xi,iota,delta,alpha) + BM2022_WealthTaxRevenue(h,aprime,a,z,tau_a,xi_a);
 
@@ -114,12 +114,17 @@ AggVars=EvalFnOnAgentDist_AggVars_Case1(StationaryDist,Policy,FnsToEvaluate,Par,
 %% Solve initial stationary general eqm
 GEPriceParamNames_pre={'r','iota','B','G'};
 
+% intermediateEqns take Params and AggVars as inputs, output can be used in
+% GeneralEqmEqns. They get evaluated in order, so can use output from one as an input to a later one.
+heteroagentoptions.intermediateEqns.K=@(A,B) A-B; % physical capital K: A is asset supply, K and B are asset demand (some saving are used for gov debt, rest goes to physical capital)
+heteroagentoptions.intermediateEqns.Y=@(K,L,alpha) (K^(alpha))*(L^(1-alpha)); % output Y
+
 GeneralEqmEqns_pre.capitalmarket=@(r,K,L,alpha,delta) r-(alpha*(K^(alpha-1))*(L^(1-alpha))-delta); % interest rate equals marginal product of capital (net of depreciation)
-GeneralEqmEqns_pre.iotacalib=@(iota,iota_target,K,L,alpha) iota_target - iota/((K^(alpha))*(L^(1-alpha))); % get iota to GDP-per-capita ratio correct
+GeneralEqmEqns_pre.iotacalib=@(iota,iota_target,Y) iota_target - iota/Y; % get iota to GDP-per-capita ratio correct
 % Note: because iota is same for everyone, just use it directly here rather than needing to calculate it as an aggregate var.
 GeneralEqmEqns_pre.govbudget=@(r,B,G,TaxRevenue) (1+r)*B+G-(B+TaxRevenue); % Balance the goverment budget
 % Include the calibration target as a general eqm constraint
-GeneralEqmEqns_pre.govdebtcalib=@(Bbar,B,K,L,alpha) Bbar - B/((K^(alpha))*(L^(1-alpha))); % Gov Debt-to-GDP ratio of Bbar
+GeneralEqmEqns_pre.govdebtcalib=@(Bbar,B,Y) Bbar - B/Y; % Gov Debt-to-GDP ratio of Bbar
 
 heteroagentoptions.verbose=1;
 [p_eqm_init,GECondns_init]=HeteroAgentStationaryEqm_Case1(n_d, n_a, n_z, 0, pi_z, d_grid, a_grid, z_grid, ReturnFn, FnsToEvaluate, GeneralEqmEqns_pre, Par, DiscountFactorParamNames, [], [], [], GEPriceParamNames_pre,heteroagentoptions, simoptions, vfoptions);
@@ -132,13 +137,6 @@ Par.G=p_eqm_init.G;
 [V_init,Policy_init]=ValueFnIter_Case1(n_d,n_a,n_z,d_grid,a_grid,z_grid,pi_z,ReturnFn,Par,DiscountFactorParamNames,[],vfoptions);
 StationaryDist_init=StationaryDist_Case1(Policy_init,n_d,n_a,n_z,pi_z,simoptions);
 
-% Double-check that no-one is hitting the max of the a_grid
-asset_cdf=cumsum(sum(StationaryDist_init,2));
-figure_c=figure_c+1;
-figure(figure_c);
-plot(a_grid,asset_cdf)
-title('cdf of asset in initial stationary general eqm (check not hitting the top of grid)')
-
 % Add some further FnsToEvaluate so can plot the kinds of outputs shown in Figure 3
 FnsToEvaluate2=FnsToEvaluate;
 FnsToEvaluate2.Consumption=@(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,delta,alpha) BM2022_Consumption(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,delta,alpha);
@@ -146,8 +144,9 @@ FnsToEvaluate2.Consumption=@(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,delta,a
 AggVars_init=EvalFnOnAgentDist_AggVars_Case1(StationaryDist_init,Policy_init,FnsToEvaluate2,Par,[],n_d,n_a,n_z,d_grid,a_grid,z_grid,simoptions);
 AllStats_init=EvalFnOnAgentDist_AllStats_Case1(StationaryDist_init,Policy_init,FnsToEvaluate2,Par,[],n_d,n_a,n_z,d_grid,a_grid,z_grid,simoptions);
 
-wage_init=(1-Par.alpha)*((p_eqm_init.r+Par.delta)/Par.alpha)^(Par.alpha/(Par.alpha-1));
-output_init=(AggVars_init.K.Mean^(Par.alpha))*(AggVars_init.L.Mean^(1-Par.alpha));
+K_init=AggVars_init.A.Mean-Params.B;
+wage_init=(1-Params.alpha)*((p_eqm_init.r+Params.delta)/Params.alpha)^(Params.alpha/(Params.alpha-1));
+output_init=(K_init^(Params.alpha))*(AggVars_init.L.Mean^(1-Params.alpha));
 
 C_t=AggVars_init.Consumption.Mean;
 C_tplus1=AggVars_init.Consumption.Mean^(-Par.theta); % C_t and C_t+1 are same thing in stationary general eqm
@@ -168,13 +167,23 @@ GeneralEqmEqns.govbudget=GeneralEqmEqns_pre.govbudget;
 
 %% Here we just do one tax reform, to show how it is done.
 
+% Note, pre-tax reform the initial eqm is based on
+% Params.tau=0.263;
+% Params.xi=0.049;
+% Params.tau_a=0;
+% Params.xi_a=0;
+
 % Tax reform (this is the one they found to be optimal for 'utilitarian welfare'; I had to eyeball the tau and tau_a out of Figure 4 as the exact number does not appear to be in paper, the xi and xi_a are explicit in Figure 4)
 Par.tau=0.56; % income tax
 Par.xi=0.065;
 Par.tau_a=-0.002; % wealth tax
 Par.xi_a=0.0017;
 
+Params.r=0.05; % need to substantially increase r as otherwise A is less than B with the tax reform setup, and so K is negative and things don't work
+
 %% Final stationary general eqm
+heteroagentoptions.verbose=2
+heteroagentoptions.constrainpositive={'r'}; % it kept trying negative r, so ruling that out
 tic;
 [p_eqm_final,GECondns_final]=HeteroAgentStationaryEqm_Case1(n_d, n_a, n_z, 0, pi_z, d_grid, a_grid, z_grid, ReturnFn, FnsToEvaluate, GeneralEqmEqns, Par, DiscountFactorParamNames, [], [], [], GEPriceParamNames,heteroagentoptions, simoptions, vfoptions);
 GEtime2=toc
@@ -185,6 +194,15 @@ Par.iota=p_eqm_final.iota;
 [V_final,Policy_final]=ValueFnIter_Case1(n_d,n_a,n_z,d_grid,a_grid,z_grid,pi_z,ReturnFn,Par,DiscountFactorParamNames,[],vfoptions);
 StationaryDist_final=StationaryDist_Case1(Policy_final,n_d,n_a,n_z,pi_z,simoptions);
 
+% Double-check that no-one is hitting the max of the a_grid
+asset_cdf=cumsum(sum(StationaryDist_init,2));
+asset_cdf2=cumsum(sum(StationaryDist_final,2));
+figure_c=figure_c+1;
+figure(figure_c);
+plot(a_grid,asset_cdf,a_grid,asset_cdf2)
+legend('initial eqm', 'final eqm')
+title('cdf of assets in stationary general eqm (check not hitting the top of grid)')
+
 
 save BM2022pre.mat
 
@@ -192,9 +210,12 @@ save BM2022pre.mat
 T=100; % BM2022 Fig 3 has this as x-axis, so seems appropriate
 
 % Initial guess for price path
-PricePath0.r=[linspace(p_eqm_init.r,p_eqm_final.r,ceil(T/3)),p_eqm_final.r*ones(1,T-ceil(T/3))];
-% PricePath0.iota=[linspace(p_eqm_init.iota,p_eqm_final.iota,ceil(T/3)),p_eqm_final.iota*ones(1,T-ceil(T/3))];
-PricePath0.iota=[linspace(p_eqm_init.iota,0.8*p_eqm_final.iota,ceil(T/3)),0.8*p_eqm_final.iota*ones(1,T-ceil(T/3)-1),p_eqm_final.iota]; % deliberately start without enough iota
+% Normally my guess would be the following, but we saw in the stationary general eqm that p_eqm_init.r gives negative K with the final eqm taxes.
+% PricePath0.r=[linspace(p_eqm_init.r,p_eqm_final.r,ceil(T/3)),p_eqm_final.r*ones(1,T-ceil(T/3))];
+% So instead I try out
+PricePath0.r=[linspace(0.8*p_eqm_final.r,p_eqm_final.r,ceil(T/3)),p_eqm_final.r*ones(1,T-ceil(T/3))];
+PricePath0.iota=[linspace(p_eqm_init.iota,p_eqm_final.iota,ceil(T/3)),p_eqm_final.iota*ones(1,T-ceil(T/3))];
+% PricePath0.iota=[linspace(p_eqm_init.iota,0.8*p_eqm_final.iota,ceil(T/3)),0.8*p_eqm_final.iota*ones(1,T-ceil(T/3)-1),p_eqm_final.iota]; % deliberately start without enough iota
 
 % Parameter path is trivial, as they are preannounced one-off reforms
 ParamPath.tau=Par.tau*ones(1,T);
@@ -202,6 +223,11 @@ ParamPath.xi=Par.xi*ones(1,T);
 ParamPath.tau_a=Par.tau_a*ones(1,T);
 ParamPath.xi_a=Par.xi_a*ones(1,T);
 % B is constant, so can skip putting path on it as long as value in Par is correct one.
+
+% intermediateEqns take Params and AggVars as inputs, output can be used in
+% GeneralEqmEqns. They get evaluated in order, so can use output from one as an input to a later one.
+transpathoptions.intermediateEqns.K=@(A,B) A-B; % physical capital K: A is asset supply, K and B are asset demand (some saving are used for gov debt, rest goes to physical capital)
+transpathoptions.intermediateEqns.Y=@(K,L,alpha) (K^(alpha))*(L^(1-alpha)); % output Y
 
 % Same as before, except that the government budget now has to be explicit that it is last period gov debt.
 GeneralEqmEqns_TransPath.capitalmarket=GeneralEqmEqns.capitalmarket;
@@ -213,7 +239,7 @@ transpathoptions.GEnewprice=3;
 % Need to explain to transpathoptions how to use the GeneralEqmEqns to update the general eqm transition prices (in PricePath).
 transpathoptions.GEnewprice3.howtoupdate=... % a row is: GEcondn, price, add, factor
     {'capitalmarket','r',0,0.3;...  % captialMarket GE condition will be positive if r is too big, so subtract
-    'govbudget','iota',0,0.05;... % govbudget GE condition will be positive if iota is too big, so subtract [iota is subtracted from the tax, so bigger iota means smaller TaxRevenue; note, units of iota are essentially the same as units of TaxRevenue, so don't need to think too hard about the size of the factor]
+    'govbudget','iota',0,0.2;... % govbudget GE condition will be positive if iota is too big, so subtract [iota is subtracted from the tax, so bigger iota means smaller TaxRevenue; note, units of iota are essentially the same as units of TaxRevenue, so don't need to think too hard about the size of the factor]
     };
 % Note: the update is essentially new_price=price+factor*add*GEcondn_value-factor*(1-add)*GEcondn_value
 % Notice that this adds factor*GEcondn_value when add=1 and subtracts it what add=0
@@ -223,8 +249,9 @@ transpathoptions.GEnewprice3.howtoupdate=... % a row is: GEcondn, price, add, fa
 
 % For the transition path, turn on divide and conquer
 vfoptions.divideandconquer=1;
-vfoptions.level1n=11; % might be slightly faster or slower with a higher/lower value (do a tic-toc on ValueFnOnTransPath_Case1() to find the fastest if you want to find out what to set this to)
+vfoptions.level1n=25; % might be slightly faster or slower with a higher/lower value (do a tic-toc on ValueFnOnTransPath_Case1() to find the fastest if you want to find out what to set this to)
 
+transpathoptions.tolerance=5*10^(-5); % This seems to be about how accurate we can get with n_d=101 (default would be 10^(-5), probably need a few more points to get this)
 transpathoptions.verbose=1;
 tic;
 PricePath=TransitionPath_Case1(PricePath0, ParamPath, T, V_final, StationaryDist_init, n_d, n_a, n_z, pi_z, d_grid,a_grid,z_grid, ReturnFn, FnsToEvaluate, GeneralEqmEqns, Par, DiscountFactorParamNames, transpathoptions, vfoptions, simoptions);
@@ -234,11 +261,12 @@ tpathtime=toc
 
 AgentDistPath=AgentDistOnTransPath_Case1(StationaryDist_init, PolicyPath,n_d,n_a,n_z,pi_z,T,simoptions);
 
-AggVarsPath=EvalFnOnTransPath_AggVars_Case1(FnsToEvaluate2,AgentDistPath,PolicyPath,PricePath,ParamPath, Par, T, n_d, n_a, n_z, pi_z, d_grid, a_grid,z_grid,simoptions);
-% AllStatsPath=EvalFnOnTransPath_AllStats_Case1()
+AggVarsPath=EvalFnOnTransPath_AggVars_Case1(FnsToEvaluate2,AgentDistPath,PolicyPath,PricePath,ParamPath, Params, T, n_d, n_a, n_z, d_grid, a_grid,z_grid,simoptions);
+AllStatsPath=EvalFnOnTransPath_AllStats_InfHorz(FnsToEvaluate2,AgentDistPath,PolicyPath,PricePath,ParamPath, Params, T, n_d, n_a, n_z, d_grid, a_grid,z_grid,simoptions);
 
-wagepath=((1-Par.alpha)*((PricePath.r+Par.delta)/Par.alpha).^(Par.alpha/(Par.alpha-1)))';
-outputpath=(AggVarsPath.K.Mean.^(Par.alpha)).*(AggVarsPath.L.Mean.^(1-Par.alpha));
+K_path=AggVarsPath.A.Mean-Params.B;
+wagepath=((1-Params.alpha)*((PricePath.r+Params.delta)/Params.alpha).^(Params.alpha/(Params.alpha-1)));
+outputpath=(K_path.^(Params.alpha)).*(AggVarsPath.L.Mean.^(1-Params.alpha));
 
 C_t=AggVarsPath.Consumption.Mean;
 C_tplus1=[AggVarsPath.Consumption.Mean(2:end),AggVarsPath.Consumption.Mean(end)].^(-Par.theta); % C_t+1 becomes constant in period T, so I just duplicate this
@@ -255,16 +283,16 @@ subplot(2,4,2); plot(0:1:T, [savingswedge_init,savingswedgepath])
 title('Savings wedge')
 subplot(2,4,3); plot(0:1:T, [output_init,outputpath]) 
 title('Output')
-subplot(2,4,4); plot(0:1:T, [AggVars_init.K.Mean,AggVarsPath.K.Mean]) 
+subplot(2,4,4); plot(0:1:T, [K_init,K_path]) 
 title('Capital')
 subplot(2,4,5); plot(0:1:T, [AggVars_init.L.Mean,AggVarsPath.L.Mean]) 
 title('Labor')
-subplot(2,4,6); plot(0:1:T, [p_eqm_init.r,PricePath.r']) 
+subplot(2,4,6); plot(0:1:T, [p_eqm_init.r,PricePath.r]) 
 title('Interest rate')
 subplot(2,4,7); plot(0:1:T, [wage_init,wagepath])
 title('Wage')
-% subplot(2,4,8); plot(1:1:T,[AllStats_init.K.Gini,AllStatsPath.K.Gini])
-% title('Gini wealth')
+subplot(2,4,8); plot(0:1:T,[AllStats_init.A.Gini,AllStatsPath.A.Gini])
+title('Gini wealth')
 
 
 %% Welfare calculations
