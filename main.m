@@ -3,7 +3,7 @@
 % Alessandro Di Nola
 
 clear,clc,close all
-mytoolkit = 'C:\Users\dinolaa\Documents\GitHub\VFIToolkit-matlab';
+mytoolkit = 'C:\Users\aledi\Documents\GitHub\VFIToolkit-matlab';
 addpath(genpath(mytoolkit));
 
 %% Grid sizes
@@ -15,8 +15,10 @@ n_z = 12;  % Grid points for labor productivity
 figure_c=0; % counter for figures
 
 %% Toolkit options
+vfoptions.howardssparse   = 0;    % Use sparse in Howards iterations. Default: 0
+vfoptions.lowmemory       = 0;    % Default: 0, lowmemory in Return Matrix
 vfoptions.gridinterplayer = 1;
-vfoptions.ngridinterp     = 20;
+vfoptions.ngridinterp     = 15;
 simoptions.gridinterplayer=vfoptions.gridinterplayer;
 simoptions.ngridinterp=vfoptions.ngridinterp;
 
@@ -28,21 +30,20 @@ Par.theta = 1;     % curvature of utility of consumption (CRRA parameter)
 Par.gamma = 2;     % curvature of utility of leisure (inverse Frisch elasticity)
 
 % Production
-Par.alpha = 0.333; % capital share of income
-Par.delta = 0.06;  % depreciation rate
+Par.alpha = 1.0/3.0; % capital share of income
+Par.delta = 0.06;    % depreciation rate
 
 % Taxes
 % Consumption tax
 Par.tau_s = 0.065; 
 % Income tax
-Par.tau = 0.263;
-Par.xi  = 0.049;
+Par.tau = 0.263; % level
+Par.xi  = 0.049; % progressivity
 % Wealth tax
 Par.tau_a = 0;
 Par.xi_a  = 0;
 % Lump-sum transfer 
 Par.iota_target = 0.167; % relative to per-capita GDP
-Par.iota        = 0.1; % guess, will be calibrated so we hit iota_target
 
 % Government debt-to-GDP
 Par.Bbar=1;
@@ -54,10 +55,11 @@ Par.p       = 2.2e-6; % probability to enter the super-star state
 Par.q       = 0.990;  % probability to stay in the super-star state
 Par.zbar    = 504.3;  % ability super-star state relative to mean
 
+%% Initial guesses for GE params
 % Following parameters/prices are deteremined in general eqm, these are just
 % initial guesses (I had worse guesses on the first run, these are updated
 % so the initial general eqm is quicker to solve by using less bad guesses)
-Par.r    = 0.05;   
+Par.r    = 0.03;   
 Par.iota = 0.3; 
 Par.B    = 1.8;   
 Par.G    = 0.05;
@@ -78,30 +80,61 @@ z_grid_pre=z_grid_pre./meanz;
 [meanz,~,~,statdistz]=MarkovChainMoments(z_grid_pre,pi_z_pre);
 % Add in the super-star state
 z_grid=[z_grid_pre; Par.zbar*meanz]; % meanz is very close to one in any case
-pi_z=[(1-Par.p)*pi_z_pre, Par.p*ones(n_z-1,1); (1-Par.q)*statdistz', Par.q];
+pi_z=[(1-Par.p)*pi_z_pre, Par.p*ones(n_z-1,1); 
+      (1-Par.q)*statdistz', Par.q];
 % Page 82, "We assume that agents transit from the normal to the super-star
 % state with a constant probability p and remain there with probability q.
 % When agents return to the normal state, they draw a new ability from the
 % ergodic distribution associated with the AR(1) process."
 
+isOK_piz = all(pi_z(:)>=0) && all(pi_z(:)<=1) && all(abs(sum(pi_z,2)-1)<1e-12);
+if isOK_piz
+    disp('Transition matrix pi_z is valid.');
+else
+    disp('Transition matrix pi_z is NOT valid.');
+end
+
 % BM write that "0.02% of households are in the super-star state at any
 % point in time". Let's check if this is the case
 
-[~,~,~,statdistz]=MarkovChainMoments(z_grid_pre,pi_z_pre);
+[~,~,~,statdistz]=MarkovChainMoments(z_grid,pi_z);
+
+fprintf('Percentage of households in super-star state: %.3f %% \n',100*statdistz(n_z))
 
 %% Return fn and discount factor
 DiscountFactorParamNames={'beta'};
 
-ReturnFn=@(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,theta,gamma,delta,alpha)...
-    BoarMidrigan2022_ReturnFn(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,theta,gamma,delta,alpha);
+ReturnFn=@(h,aprime,a,z,alpha,delta,r,tau,xi,iota,tau_a,xi_a,tau_s,theta,gamma)...
+    f_ReturnFn(h,aprime,a,z,alpha,delta,r,tau,xi,iota,tau_a,xi_a,tau_s,theta,gamma);
 
 %% Test the value fn and policy fn
 tic;
 [V,Policy]=ValueFnIter_Case1(n_d,n_a,n_z,d_grid,a_grid,z_grid,pi_z,ReturnFn,Par,DiscountFactorParamNames,[],vfoptions);
 vftime=toc
 
+% Compute policy functions h(a,z) and a'(a,z) in values
+PolicyValues=PolicyInd2Val_Case1(Policy,n_d,n_a,n_z,d_grid,a_grid,vfoptions);
+PolicyValues = gather(PolicyValues);
+pol_h = reshape(PolicyValues(1,:,:),[n_a,n_z]);
+pol_aprime = reshape(PolicyValues(2,:,:),[n_a,n_z]);
+
+figure
+plot(a_grid,pol_h)
+xlabel('Assets, a')
+title('Policy function h(a,z)')
+
+figure
+plot(a_grid,a_grid,'--')
+hold on
+plot(a_grid,pol_aprime)
+xlabel('Assets, a')
+title("Policy function a'(a,z)")
+
 %% Test for Agent Dist
 StationaryDist=StationaryDist_Case1(Policy,n_d,n_a,n_z,pi_z,simoptions);
+
+figure
+plot(a_grid,sum(StationaryDist,2))
 
 %% Setup model moments
 FnsToEvaluate.A=@(h,aprime,a,z) a;
