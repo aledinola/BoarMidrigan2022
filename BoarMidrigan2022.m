@@ -1,5 +1,6 @@
 % Boar & Midrigan (2022) - Efficient Redistribution
-
+clear,clc,close all
+addpath(genpath('C:\Users\aledi\Documents\GitHub\VFIToolkit-matlab'))
 % Essentially, we are going to be solving transition paths in an largely plain-vanilla Aiyagari model with endogenous labour.
 % I denote the markov process on per-unit-time-worked earnings as z, they called it e.
 
@@ -98,7 +99,9 @@ ReturnFn=@(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,theta,gamma,delta,alpha).
     BoarMidrigan2022_ReturnFn(h,aprime,a,z,r,tau_s,tau,xi,tau_a,xi_a,iota,theta,gamma,delta,alpha);
 
 %% Test the value fn and policy fn
+vfoptions.maxiter = 100;
 vfoptions.gridinterplayer=1;
+vfoptions.howardssparse=0;
 vfoptions.ngridinterp=20;
 simoptions.gridinterplayer=vfoptions.gridinterplayer;
 simoptions.ngridinterp=vfoptions.ngridinterp;
